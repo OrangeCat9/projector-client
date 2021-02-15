@@ -145,6 +145,13 @@ val packageDarwinX64 by tasks.creating(Exec::class) {
   commandLine(packagerCommand + listOf("--platform=darwin", "--arch=x64"))
 }
 
+val packageDarwinARM64 by tasks.creating(Exec::class) {
+  group = "dist"
+  dependsOn(initDistEnvironment)
+  workingDir(project.file(distDir))
+  commandLine(packagerCommand + listOf("--platform=darwin", "--arch=arm64"))
+}
+
 val packageLinuxX64 by tasks.creating(Exec::class) {
   group = "dist"
   dependsOn(initDistEnvironment)
@@ -172,13 +179,24 @@ val packageWin32X64 by tasks.creating(Exec::class) {
 
 tasks.create("dist") {
   group = "dist"
-  dependsOn(packageDarwinX64, packageLinuxX64, packageWin32X64)
+  dependsOn(packageDarwinX64, packageDarwinARM64, packageLinuxX64, packageWin32X64)
 }
 
 val packageZipDarwinX64 by tasks.creating(Zip::class) {
   group = "dist"
   dependsOn(packageDarwinX64)
   val targetName = "$appName-darwin-x64"
+  from(project.file(electronOutDir)) {
+    include("$targetName/**")
+  }
+  archiveFileName.set("$targetName.zip")
+  destinationDirectory.set(project.file(electronOutDir))
+}
+
+val packageZipDarwinARM64 by tasks.creating(Zip::class) {
+  group = "dist"
+  dependsOn(packageDarwinARM64)
+  val targetName = "$appName-darwin-arm64"
   from(project.file(electronOutDir)) {
     include("$targetName/**")
   }
@@ -210,7 +228,7 @@ val packageZipWin32X64 by tasks.creating(Zip::class) {
 
 tasks.create("distZip") {
   group = "dist"
-  dependsOn(packageZipDarwinX64, packageZipLinuxX64, packageZipWin32X64)
+  dependsOn(packageZipDarwinX64, packageZipDarwinARM64, packageZipLinuxX64, packageZipWin32X64)
 }
 
 tasks.create<Exec>("electronProductionRun") {
