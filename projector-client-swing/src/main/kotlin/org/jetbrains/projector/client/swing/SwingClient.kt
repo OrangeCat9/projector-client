@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+@file:Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE")
 package org.jetbrains.projector.client.swing
 
 import kotlinx.coroutines.GlobalScope
@@ -34,14 +35,16 @@ import org.jetbrains.projector.client.common.protocol.KotlinxJsonToServerHandsha
 import org.jetbrains.projector.client.common.protocol.KotlinxProtoBufToClientMessageDecoder
 import org.jetbrains.projector.client.common.protocol.SerializationToServerMessageEncoder
 import org.jetbrains.projector.common.misc.Do
-import org.jetbrains.projector.common.protocol.data.CommonIntSize
 import org.jetbrains.projector.common.protocol.handshake.*
 import org.jetbrains.projector.common.protocol.toClient.*
+import org.jetbrains.projector.common.protocol.toServer.ClientDisplaySetChangeEvent
 import org.jetbrains.projector.util.logging.Logger
+import sun.awt.DisplayChangedListener
+import sun.java2d.SunGraphicsEnvironment
+import java.awt.GraphicsEnvironment
 import java.util.*
 import javax.swing.SwingUtilities
 import javax.swing.Timer
-import kotlin.collections.ArrayDeque
 
 class SwingClient(val transport: ProjectorTransport, val windowManager: AbstractWindowManager<*>) {
   val logger = Logger<SwingClient>()
@@ -59,13 +62,30 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
         timer.stop()
       }
     }
+
+    val displayListener = object: DisplayChangedListener {
+      override fun displayChanged() = sendDisplayChangeEvent()
+      override fun paletteChanged() = sendDisplayChangeEvent()
+    }
+
+    val sunGraphicsEnvironment = GraphicsEnvironment.getLocalGraphicsEnvironment() as? SunGraphicsEnvironment
+    sunGraphicsEnvironment?.addDisplayChangedListener(displayListener)
+    transport.onClosed.handle { _, _ ->
+      SwingUtilities.invokeLater {
+        sunGraphicsEnvironment?.removeDisplayChangedListener(displayListener)
+      }
+    }
+  }
+
+  fun sendDisplayChangeEvent() {
+    transport.send(ClientDisplaySetChangeEvent(produceDisplayList()))
   }
 
   fun processEvent(serverEvent: ServerEvent) {
     Do exhaustive when(serverEvent) {
       is ServerImageDataReplyEvent -> ImageCacher.putImageData(serverEvent.imageId, serverEvent.imageData)
       is ServerPingReplyEvent -> logger.debug { "Received and discarded server ping reply event: $serverEvent" }
-      is ServerClipboardEvent -> logger.debug { "Received and discarded server clipboard event: ${serverEvent.stringContent}" }
+      is ServerClipboardEvent -> windowManager.handleClipboardEvent(serverEvent)
       is ServerWindowSetChangedEvent -> windowManager.windowSetUpdated(serverEvent)
       is ServerDrawCommandsEvent -> {
         val target = serverEvent.target
@@ -73,13 +93,16 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
           is ServerDrawCommandsEvent.Target.Onscreen -> windowManager.doWindowDraw(target.windowId, serverEvent.drawEvents)
           is ServerDrawCommandsEvent.Target.Offscreen -> {
             val processor = ImageCacher.getOffscreenProcessor(target)
-            val deque = ArrayDeque(serverEvent.drawEvents.shrinkByPaintEvents())
-            processor.process(deque)
+            val newEvents = serverEvent.drawEvents.shrinkByPaintEvents()
+            val firstUnsuccessfulEvent = processor.processNew(newEvents)
+            firstUnsuccessfulEvent?.let {
+              logger.error { "Skipping drawing unsuccessful event for $target" }  // todo: support it
+            }
           }
         }
       }
       is ServerCaretInfoChangedEvent -> logger.debug { "Received and discarded caret info event: $serverEvent" }
-      is ServerMarkdownEvent -> logger.debug { "Received and discarded markdown event: $serverEvent" }
+      is ServerMarkdownEvent -> windowManager.handleMarkdownEvent(serverEvent)
       is ServerWindowColorsEvent -> logger.debug { "Received and discarded color event: $serverEvent" }
     }
   }
@@ -89,17 +112,21 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
 
     transport.onOpen.await()
 
+    val allScreens = produceDisplayList()
+
     val handshake = ToServerHandshakeEvent(
       commonVersion = COMMON_VERSION,
       commonVersionId = commonVersionList.indexOf(COMMON_VERSION),
 
-      initialSize = CommonIntSize(1024, 968),
+      clientDoesWindowManagement = true,
+      displays = allScreens,
       supportedToClientCompressions = listOf(CompressionType.NONE),
       supportedToClientProtocols = listOf(ProtocolType.KOTLINX_PROTOBUF),
       supportedToServerCompressions = listOf(CompressionType.NONE),
       supportedToServerProtocols = listOf(ProtocolType.KOTLINX_JSON)
     )
 
+    transport.send("$HANDSHAKE_VERSION;${handshakeVersionList.indexOf(HANDSHAKE_VERSION)}")
     transport.send(KotlinxJsonToServerHandshakeEncoder.encode(handshake))
 
     val response = transport.messages.receive()
@@ -133,6 +160,16 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
           processEvent(it)
         }
       }
+    }
+
+    SwingUtilities.invokeLater {
+      windowManager.windowSetUpdated(ServerWindowSetChangedEvent())
+    }
+  }
+
+  private fun produceDisplayList() = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map {
+    with(it.defaultConfiguration.bounds) {
+      DisplayDescription(x, y, width, height, it.defaultConfiguration.defaultTransform.scaleX)
     }
   }
 }

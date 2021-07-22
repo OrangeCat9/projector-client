@@ -165,6 +165,8 @@ class Renderer(private val renderingSurface: RenderingSurface) {
       applyFillStyle(fillStyle)
       applyStroke(strokeData)
       applyFont(font)
+      applyRule(rule)
+      applyAlpha(alpha)
     }
   }
 
@@ -426,7 +428,7 @@ class Renderer(private val renderingSurface: RenderingSurface) {
     requestedState.transform = tx
   }
 
-  fun setFont(fontId: Short?, fontSize: Int) {
+  fun setFont(fontId: Short?, fontSize: Int, ligaturesOn: Boolean) {
     val font = if (fontId == null) {
       logger.debug { "null is used as a font ID. Using Arial..." }
 
@@ -437,6 +439,12 @@ class Renderer(private val renderingSurface: RenderingSurface) {
     }
 
     requestedState.font = font
+    renderingSurface.canvas.fontVariantLigatures = ligaturesOn.toLigatureVariant()
+    renderingSurface.canvas
+  }
+
+  private fun Boolean.toLigatureVariant(): String {
+    return if (this) "normal" else "none"
   }
 
   fun drawImage(image: ImageSource, x: Double, y: Double) {
@@ -616,6 +624,17 @@ class Renderer(private val renderingSurface: RenderingSurface) {
       var rule: AlphaCompositeRule = AlphaCompositeRule.SRC_OVER,
       var alpha: Double = 1.0,
       var paint: PaintColor? = SolidColor(Defaults.FOREGROUND_COLOR_ARGB),
-    )
+    ) {
+
+      fun setTo(other: RequestedRenderingState) {
+        identitySpaceClip = other.identitySpaceClip
+        transform = other.transform
+        strokeData = other.strokeData
+        font = other.font
+        rule = other.rule
+        alpha = other.alpha
+        paint = other.paint
+      }
+    }
   }
 }

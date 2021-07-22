@@ -34,13 +34,26 @@ actual object ParamsProvider {
     else -> hostname
   }
 
-  private fun getCurrentPort(): String = when (val port = window.location.port) {
-    "" -> "8887"  // when you open it on site (for example, "http://example.com"), port is empty, so assume default port is preferred
-    else -> port
+  private fun getCurrentPath(): String = when (window.location.protocol) {
+    "file:" -> ""
+    else -> window.location.pathname
+  }
+
+  private fun protocolPort(): String {
+    return if (window.location.protocol == "https:") "443" else "80"
+  }
+
+  private fun getCurrentPort(): String {
+    val port = window.location.port
+    return if (port.isEmpty()) protocolPort() else port
   }
 
   private val DEFAULT_HOST = getCurrentHostname()
   private val DEFAULT_PORT = getCurrentPort()
+  private val DEFAULT_PATH = when (getCurrentHostname()) {
+    "projector.jetbrains.com" -> ""
+    else -> getCurrentPath()
+  }
   private val DEFAULT_TO_CLIENT_FORMAT: ToClientFormat = ToClientFormat.KOTLINX_JSON_MANUAL
   private const val DEFAULT_IMAGE_TTL = 60_000.0  // in ms
   private const val DEFAULT_FLUSH_DELAY = 1
@@ -60,6 +73,9 @@ actual object ParamsProvider {
   actual val CLIPPING_BORDERS: Boolean
   val HOST: String
   val PORT: String
+  val PATH: String
+  val RELAY_SERVER_ID: String?
+  val ENABLE_RELAY: Boolean get() = RELAY_SERVER_ID != null
   actual val LOG_UNSUPPORTED_EVENTS: Boolean
   val DOUBLE_BUFFERING: Boolean
   val ENABLE_COMPRESSION: Boolean
@@ -77,7 +93,7 @@ actual object ParamsProvider {
   val SPECULATIVE_TYPING: Boolean
   val ENABLE_WSS: Boolean
   val HANDSHAKE_TOKEN: String?
-  val MOBILE_SETTING: MobileSetting
+  val INPUT_METHOD_TYPE: InputMethodType
   val IDE_WINDOW_ID: Int?
   val SHOW_NOT_SECURE_WARNING: Boolean
   val REPAINT_INTERVAL_MS: Int
@@ -89,9 +105,11 @@ actual object ParamsProvider {
 
   init {
     with(URL(window.location.href)) {
+      RELAY_SERVER_ID = searchParams.get("relayServerId")
       CLIPPING_BORDERS = searchParams.has("clipping")
       HOST = searchParams.get("host") ?: DEFAULT_HOST
-      PORT = searchParams.get("port") ?: DEFAULT_PORT
+      PORT = searchParams.get("port") ?: if (ENABLE_RELAY) protocolPort() else DEFAULT_PORT
+      PATH = searchParams.get("path") ?: DEFAULT_PATH
       LOG_UNSUPPORTED_EVENTS = searchParams.has("logUnsupportedEvents")
       DOUBLE_BUFFERING = searchParams.has("doubleBuffering")
       ENABLE_COMPRESSION = searchParams.has("enableCompression")
@@ -121,12 +139,18 @@ actual object ParamsProvider {
       SPECULATIVE_TYPING = searchParams.has("speculativeTyping")
       ENABLE_WSS = searchParams.has("wss") || window.location.protocol == "https:"
       HANDSHAKE_TOKEN = searchParams.get("token")
-      MOBILE_SETTING = when (searchParams.has("mobile")) {
-        true -> when (searchParams.get("mobile")) {
-          "onlyButtons" -> MobileSetting.ONLY_BUTTONS
-          else -> MobileSetting.ALL
+      INPUT_METHOD_TYPE = when (searchParams.get("inputMethod")) {
+        "legacy" -> InputMethodType.LEGACY
+        "mobileOnlyButtons" -> InputMethodType.OVERLAY_BUTTONS
+        "mobile" -> InputMethodType.OVERLAY_BUTTONS_N_VIRTUAL_KEYBOARD
+        "ime" -> InputMethodType.IME
+        else -> when (searchParams.has("mobile")) {  // save support for legacy params for now
+          true -> when (searchParams.get("mobile")) {
+            "onlyButtons" -> InputMethodType.OVERLAY_BUTTONS
+            else -> InputMethodType.OVERLAY_BUTTONS_N_VIRTUAL_KEYBOARD
+          }
+          false -> InputMethodType.IME
         }
-        false -> MobileSetting.DISABLED
       }
       IDE_WINDOW_ID = searchParams.get("ideWindow")?.toIntOrNull()
       SHOW_NOT_SECURE_WARNING = (searchParams.get("notSecureWarning") ?: DEFAULT_SHOW_NOT_SECURE_WARNING).toBoolean()
@@ -146,10 +170,11 @@ actual object ParamsProvider {
     KOTLINX_PROTOBUF,
   }
 
-  enum class MobileSetting {
-    DISABLED,
-    ONLY_BUTTONS,  // controls
-    ALL,  // controls + virtual keyboard
+  enum class InputMethodType {
+    LEGACY,
+    OVERLAY_BUTTONS,
+    OVERLAY_BUTTONS_N_VIRTUAL_KEYBOARD,
+    IME,
   }
 
   enum class LayoutType {

@@ -9,7 +9,8 @@ Contents:
 * [Shortcuts](#shortcuts) &mdash; currently they are needed for debug purposes.
 
 ## Running
-The latest commit from master is built and deployed here: <https://projector.jetbrains.com/?host=HOST&port=PORT> (don't forget to set `HOST`
+The latest commit from master is built and deployed here: <https://projector.jetbrains.com/client/?host=HOST&port=PORT> (don't forget to
+set `HOST`
 and `PORT` to match your server's).
 
 The latest version can be downloaded at the [Artifacts page](https://github.com/JetBrains/projector-client/releases).
@@ -31,14 +32,15 @@ Tested browsers:
 You can set some settings in query parameters like this: `index.html?host=localhost&port=8887&wss`. Actual list of parameters can be found in the `ParamsProvider.kt` file. Here we describe them.
 
 ### Main parameters
-Name | Type | Default value | Description 
+Name | Type | Default value | Description
 ---|---|---|---
 `host` | String | Host of the web page | Set the host of `projector-server` to connect.
-`port` | String | `8887` | Set the port of `projector-server` to connect.
+`port` | String | Port of the web page | Set the port of `projector-server` to connect.
+`path` | String | Path of the web page | Set the path of `projector-server` to connect.
 `wss` | Presence | Protocol of the web page | Enable security of WebSocket connection.
 `notSecureWarning` | Boolean | `true` | Enable warning saying that the context is not [secure](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
 `token` | String? | Not present | Set a password which will be checked by the server on the connection.
-`mobile` | String? | Not present | Enable overlay controls handy for mobile devices. Presented param activates all controls. Provide `onlyButtons` value if you don't use virtual keyboard.
+`inputMethod` | String? | `ime` | `ime` supports Input Method Editors and Dead Keys. `mobileOnlyButtons` – enable overlay controls handy for mobile devices. `mobile` – enable overlay controls and a virtual keyboard toggle handy for mobile devices. `legacy` doesn't support input methods.
 `ideWindow` | Int? | Not present | Specify the IDE window ID to show. The first ID is `0`. If not presented, all IDE windows are shown.
 `layout` | Enum (String) | `jsDefault` | Specify keyboard layout. Possible values: `jsDefault`, `frAzerty`.
 
@@ -56,7 +58,7 @@ Name | Type | Default value | Description
 `showSentReceived` | Presence | Not present | Show blinking indicators in the corner of the screen when events were sent or received.
 `showPing` | Presence | Not present | Show some info of simple ping to and from server.
 `pingAverageCount` | Int? | Not present | Activate displaying average ping of this number of iterations.
-`backgroundColor` | String | `2A2` (green) | Set color of area where there are no windows.
+`backgroundColor` | String | `#282` (green) | Set color of area where there are no windows.
 `userScalingRatio` | Double | `1.0` | Set scaling ratio.
 `pingInterval` | Int | `1000` | Set interval of pinging in ms.
 `showProcessingTime` | Presence | Not present | Log processing time of server messages to browser console.
@@ -65,6 +67,7 @@ Name | Type | Default value | Description
 `repaintInterval` | Int | `333` | Set interval of repainting that is needed to paint loaded images in ms.
 `cacheSize` | Int | `5M` | Set size of cache for images in Chars.
 `blockClosing` | Boolean | `true` | Enable blocking of accidental closing of the web page
+`relayServerId` | String? | Not present | Identifier of Projector server to connect to for relay connection. Warning: Static files must be accessed via https when relay is used.
 
 ## Shortcuts
 - `Ctrl + F10` prints statistics to the browser console. Example:  

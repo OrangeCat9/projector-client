@@ -26,25 +26,25 @@ package org.jetbrains.projector.client.swing
 import org.jetbrains.projector.client.common.canvas.SwingCanvas
 import org.jetbrains.projector.common.protocol.toServer.*
 import java.awt.Dimension
-import java.awt.FocusTraversalPolicy
 import java.awt.Graphics
 import java.awt.event.*
-import java.lang.Math.max
-import javax.swing.ImageIcon
-import javax.swing.JFrame
-import javax.swing.JLabel
 import javax.swing.JPanel
 
-class ProjectorViewPanel(val canvas: SwingCanvas, val connectionTime: Long) : JPanel() {
+open class ProjectorViewPanel(val canvas: SwingCanvas, val connectionTime: Long, var appliedCanvasScale: Double = 1.0) : JPanel() {
+  init {
+    isFocusable = true
+    focusTraversalKeysEnabled = false // these events need to be forwarded to remote
+  }
+
   override fun paintComponent(g: Graphics) {
-    g.drawImage(canvas.image, 0, 0, this)
+    g.drawImage(canvas.image, 0, 0, (canvas.image.width * appliedCanvasScale).toInt(), (canvas.image.height * appliedCanvasScale).toInt(), this)
   }
 
   override fun preferredSize(): Dimension {
-    return Dimension(canvas.width, canvas.height)
+    return Dimension((canvas.image.width * appliedCanvasScale).toInt(), (canvas.image.height * appliedCanvasScale).toInt())
   }
 
-  fun addListeners(windowId: Int, frame: JFrame, eventSink: (ClientEvent) -> Unit) {
+  fun addListeners(windowId: Int, eventSink: (ClientEvent) -> Unit) {
     val mouseListener = object: MouseAdapter() {
       fun convertMouseEvent(event: MouseEvent, eventType: ClientMouseEvent.MouseEventType): ClientMouseEvent {
         return ClientMouseEvent((System.currentTimeMillis() - connectionTime).toInt(), windowId, event.xOnScreen, event.yOnScreen, (maxOf(0, event.button - 1)).toShort(), event.clickCount,
@@ -95,6 +95,7 @@ class ProjectorViewPanel(val canvas: SwingCanvas, val connectionTime: Long) : JP
 
       override fun mousePressed(e: MouseEvent) {
         eventSink(convertMouseEvent(e, ClientMouseEvent.MouseEventType.DOWN))
+        requestFocusInWindow(FocusEvent.Cause.MOUSE_EVENT)
       }
 
       override fun mouseReleased(e: MouseEvent) {
@@ -131,7 +132,6 @@ class ProjectorViewPanel(val canvas: SwingCanvas, val connectionTime: Long) : JP
     addMouseListener(mouseListener)
     addMouseMotionListener(mouseListener)
     addMouseWheelListener(mouseListener)
-
-    frame.addKeyListener(keyboardListener)
+    addKeyListener(keyboardListener)
   }
 }

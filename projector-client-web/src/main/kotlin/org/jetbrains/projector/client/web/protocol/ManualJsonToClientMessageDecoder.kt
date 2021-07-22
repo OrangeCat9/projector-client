@@ -229,7 +229,7 @@ object ManualJsonToClientMessageDecoder : ToClientMessageDecoder {
         content["f"] as Int
       )
 
-      "g" -> ServerSetFontEvent(content["a"] as Short, content["b"] as Int)
+      "g" -> ServerSetFontEvent(content["a"] as Short, content["b"] as Int, content["c"] as Boolean)
 
       "h" -> ServerSetClipEvent(content["a"].unsafeCast<Array<Any>?>()?.toCommonShape())
 
@@ -382,6 +382,7 @@ object ManualJsonToClientMessageDecoder : ToClientMessageDecoder {
     return when (type) {
       "a" -> ImageId.BufferedImageId(content["a"] as Int, content["b"] as Int)
       "b" -> ImageId.PVolatileImageId((content["a"] as Double).roundToLong())  // todo: is it a correct way?
+      "c" -> ImageId.Unknown(content["a"] as String)
       else -> throw IllegalArgumentException("Invalid image id type: ${JSON.stringify(this)}")
     }
   }

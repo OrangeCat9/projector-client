@@ -35,6 +35,7 @@ val javassistVersion: String by project
 
 dependencies {
   implementation(project(":projector-agent-common"))
+  implementation(project(":projector-agent-initialization"))
   implementation(project(":projector-util-logging"))
   implementation("org.javassist:javassist:$javassistVersion")
 }
@@ -49,6 +50,8 @@ tasks.withType<Jar> {
       "Agent-Class" to agentClass
     )
   }
+
+  exclude("META-INF/versions/9/module-info.class")
 
   from(inline(configurations.runtimeClasspath))
 }

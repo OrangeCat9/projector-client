@@ -21,13 +21,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package org.jetbrains.projector.client.web.input
+package org.jetbrains.projector.client.web.input.key
 
 import kotlinx.browser.document
 import kotlinx.browser.window
-import org.jetbrains.projector.client.common.misc.ParamsProvider
 import org.jetbrains.projector.client.common.misc.TimeStamp
+import org.jetbrains.projector.client.web.input.JsKey
+import org.jetbrains.projector.client.web.input.SpecialKeysState
 import org.jetbrains.projector.client.web.misc.toDisplayType
+import org.jetbrains.projector.common.protocol.data.VK
 import org.jetbrains.projector.common.protocol.toServer.ClientEvent
 import org.jetbrains.projector.common.protocol.toServer.ClientKeyEvent
 import org.jetbrains.projector.common.protocol.toServer.ClientKeyEvent.KeyEventType.DOWN
@@ -42,21 +44,17 @@ import org.w3c.dom.events.InputEvent
 import org.w3c.dom.events.MouseEvent
 import kotlin.math.roundToInt
 
-interface MobileKeyboardHelper {
-
-  fun dispose()
-}
-
-object NopMobileKeyboardHelper : MobileKeyboardHelper {
-
-  override fun dispose() {}
-}
-
-class MobileKeyboardHelperImpl(
+class MobileInputMethod(
   private val openingTimeStamp: Int,
   private val specialKeysState: SpecialKeysState,
+  private val supportVirtualKeyboard: Boolean,
   private val clientEventConsumer: (ClientEvent) -> Unit,
-) : MobileKeyboardHelper {
+) : InputMethod {
+
+  private val fallbackInputMethod = when (supportVirtualKeyboard) {
+    true -> null  // todo: extract mobile virtual keyboard input method and use here
+    false -> LegacyInputMethod(openingTimeStamp, specialKeysState, clientEventConsumer)
+  }
 
   private val panel = (document.createElement("div") as HTMLDivElement).apply {
     style.apply {
@@ -76,12 +74,15 @@ class MobileKeyboardHelperImpl(
     }
 
     (1..12).forEach {
+      val jsKey = JsKey("F$it")
+      val code = VK.valueOf("F$it")
+
       SimpleButton(
         text = "F$it",
         parent = this,
+        elementId = "pressF$it",
         onClick = {
-          fireKeyEvent(key = "F$it", code = "F$it", location = STANDARD, keyEventType = DOWN)
-          fireKeyEvent(key = "F$it", code = "F$it", location = STANDARD, keyEventType = UP)
+          fireDownUp(jsKey, code)
         }
       )
 
@@ -119,8 +120,7 @@ class MobileKeyboardHelperImpl(
       if (it.key == "Tab") {  // don't use `it.code == "Tab"` here because `it.code` is empty on mobile devices
         it.preventDefault()
         it.stopPropagation()
-        fireKeyEvent(key = "Tab", code = "Tab", location = STANDARD, keyEventType = DOWN)
-        fireKeyEvent(key = "Tab", code = "Tab", location = STANDARD, keyEventType = UP)
+        fireDownPressUp(VK.TAB)
       }
     }
 
@@ -129,28 +129,23 @@ class MobileKeyboardHelperImpl(
 
       when (val inputType = event.asDynamic().inputType) {
         "insertText", "insertCompositionText" -> event.data.forEach { char ->
-          val key = char.toString()
-          val code = "Key${char.toUpperCase()}"  // todo: for special symbols like "(", it's not true; they still work
+          val code = VK.codeMap[char] ?: VK.UNDEFINED  // todo: firing VK.UNDEFINED is not correct for example for cyrillic letters
 
-          fireKeyEvent(key = key, code = code, location = STANDARD, keyEventType = DOWN)
-          fireKeyPressEvent(key = key)
-          fireKeyEvent(key = key, code = code, location = STANDARD, keyEventType = UP)
+          val shiftWasAlreadyEnabled = specialKeysState.isShiftEnabled
+          if (!shiftWasAlreadyEnabled && char.isUpperCase()) {
+            specialKeysState.isShiftEnabled = true
+            fireKeyEvent(key = JsKey("ShiftLeft"), code = VK.SHIFT, location = LEFT, keyEventType = DOWN)
+          }
+          fireDownPressUp(code, char)
+          if (!shiftWasAlreadyEnabled && char.isUpperCase()) {
+            specialKeysState.isShiftEnabled = false
+            fireKeyEvent(key = JsKey("ShiftLeft"), code = VK.SHIFT, location = LEFT, keyEventType = UP)
+          }
         }
 
-        "deleteContentBackward" -> {
-          fireKeyEvent(key = "Backspace", code = "Backspace", location = STANDARD, keyEventType = DOWN)
-          fireKeyEvent(key = "Backspace", code = "Backspace", location = STANDARD, keyEventType = UP)
-        }
-
-        "deleteContentForward" -> {
-          fireKeyEvent(key = "Delete", code = "Delete", location = STANDARD, keyEventType = DOWN)
-          fireKeyEvent(key = "Delete", code = "Delete", location = STANDARD, keyEventType = UP)
-        }
-
-        "insertLineBreak" -> {
-          fireKeyEvent(key = "Enter", code = "Enter", location = STANDARD, keyEventType = DOWN)
-          fireKeyEvent(key = "Enter", code = "Enter", location = STANDARD, keyEventType = UP)
-        }
+        "deleteContentBackward" -> fireDownPressUp(VK.BACK_SPACE)
+        "deleteContentForward" -> fireDownPressUp(VK.DELETE)
+        "insertLineBreak" -> fireDownPressUp(VK.ENTER)
 
         else -> {
           logger.info { "Unknown inputType=$inputType" }
@@ -158,6 +153,10 @@ class MobileKeyboardHelperImpl(
           console.log(event)
         }
       }
+    }
+
+    onclick = {
+      it.stopPropagation()
     }
 
     document.body!!.appendChild(this)
@@ -178,11 +177,6 @@ class MobileKeyboardHelperImpl(
 
   @Suppress("UNUSED_PARAMETER")  // actually, parameter is used in function refs
   private fun handleVirtualKeyboardSelection(unused: Event) {
-    fun sendArrow(direction: String) {
-      fireKeyEvent(key = "Arrow$direction", code = "Arrow$direction", location = STANDARD, keyEventType = DOWN)
-      fireKeyEvent(key = "Arrow$direction", code = "Arrow$direction", location = STANDARD, keyEventType = UP)
-    }
-
     if (
       document.activeElement == virtualKeyboardInput &&
       virtualKeyboardInput.value == TEXTAREA_VALUE &&
@@ -194,10 +188,12 @@ class MobileKeyboardHelperImpl(
       // So here we make sure that the selection event is received way after the last input event and execute cursor move only if it's true
       if (TimeStamp.current - lastSelectionResetTimeStamp > MINIMUM_MS_BETWEEN_INPUT_AND_SELECTION_CHANGE) {
         when (virtualKeyboardInput.selectionStart) {
-          0 -> sendArrow("Up")
-          1 -> sendArrow("Left")
-          3 -> sendArrow("Right")
-          4 -> sendArrow("Down")
+          0 -> fireDownUp(JsKey("ArrowUp"), VK.UP)
+          1 -> fireDownUp(JsKey("Home"), VK.HOME)
+          2 -> fireDownUp(JsKey("ArrowLeft"), VK.LEFT)
+          4 -> fireDownUp(JsKey("ArrowRight"), VK.RIGHT)
+          5 -> fireDownUp(JsKey("End"), VK.END)
+          6 -> fireDownUp(JsKey("ArrowDown"), VK.DOWN)
           else -> Unit
         }
       }
@@ -207,16 +203,30 @@ class MobileKeyboardHelperImpl(
     }
   }
 
+  private fun fireDownPressUp(code: VK, char: Char = code.typedSymbols.single()) {
+    val jsKey = JsKey(char.toString())
+    fireKeyEvent(key = jsKey, code = code, location = STANDARD, keyEventType = DOWN)
+    fireKeyPressEvent(char = char)
+    fireKeyEvent(key = jsKey, code = code, location = STANDARD, keyEventType = UP)
+  }
+
+  private fun fireDownUp(key: JsKey, code: VK) {
+    fireKeyEvent(key = key, code = code, location = STANDARD, keyEventType = DOWN)
+    fireKeyEvent(key = key, code = code, location = STANDARD, keyEventType = UP)
+  }
+
   private fun fireKeyEvent(
-    key: String,
-    code: String,
+    key: JsKey,
+    code: VK,
     location: ClientKeyEvent.KeyLocation,
     keyEventType: ClientKeyEvent.KeyEventType,
   ) {
+    val char = keyToChar(key, code)
+
     clientEventConsumer(
       ClientKeyEvent(
         timeStamp = TimeStamp.current.roundToInt() - openingTimeStamp,
-        key = if (key.length == 1 && specialKeysState.isShiftEnabled) key.toUpperCase() else key,
+        char = if (specialKeysState.isShiftEnabled) char.uppercaseChar() else char,
         code = code,
         location = location,
         modifiers = specialKeysState.keyModifiers,
@@ -225,11 +235,11 @@ class MobileKeyboardHelperImpl(
     )
   }
 
-  private fun fireKeyPressEvent(key: String) {
+  private fun fireKeyPressEvent(char: Char) {
     clientEventConsumer(
       ClientKeyPressEvent(
         timeStamp = TimeStamp.current.roundToInt() - openingTimeStamp,
-        key = if (key.length == 1 && specialKeysState.isShiftEnabled) key.toUpperCase() else key,
+        char = if (specialKeysState.isShiftEnabled) char.uppercaseChar() else char,
         modifiers = specialKeysState.keyModifiers
       )
     )
@@ -239,69 +249,76 @@ class MobileKeyboardHelperImpl(
     SimpleButton(
       text = "Esc",
       parent = panel,
+      elementId = "pressEsc",
       onClick = {
-        fireKeyEvent(key = "Escape", code = "Escape", location = STANDARD, keyEventType = DOWN)
-        fireKeyEvent(key = "Escape", code = "Escape", location = STANDARD, keyEventType = UP)
+        fireDownPressUp(VK.ESCAPE)
       }
     )
+
+    fun Boolean.toKeyEventType() = when (this) {
+      true -> DOWN
+      false -> UP
+    }
 
     ToggleButton(
       text = "Alt",
       parent = panel,
+      elementId = "toggleAlt",
       onStateChange = { newState ->
         specialKeysState.isAltEnabled = newState
 
-        if (newState) {
-          fireKeyEvent(key = "Alt", code = "AltLeft", location = LEFT, keyEventType = DOWN)
-        }
-        else {
-          fireKeyEvent(key = "Alt", code = "AltLeft", location = LEFT, keyEventType = UP)
-        }
+        val key = JsKey("Alt")
+        val code = VK.ALT
+        val type = newState.toKeyEventType()
+
+        fireKeyEvent(key = key, code = code, location = LEFT, keyEventType = type)
       }
     )
 
     ToggleButton(
       text = "Ctrl",
       parent = panel,
+      elementId = "toggleCtrl",
       onStateChange = { newState ->
         specialKeysState.isCtrlEnabled = newState
 
-        if (newState) {
-          fireKeyEvent(key = "Control", code = "ControlLeft", location = LEFT, keyEventType = DOWN)
-        }
-        else {
-          fireKeyEvent(key = "Control", code = "ControlLeft", location = LEFT, keyEventType = UP)
-        }
+        val key = JsKey("Control")
+        val code = VK.CONTROL
+        val type = newState.toKeyEventType()
+
+        fireKeyEvent(key = key, code = code, location = LEFT, keyEventType = type)
       }
     )
 
     ToggleButton(
       text = "Shift",
       parent = panel,
+      elementId = "toggleShift",
       onStateChange = { newState ->
         specialKeysState.isShiftEnabled = newState
 
-        if (newState) {
-          fireKeyEvent(key = "Shift", code = "ShiftLeft", location = LEFT, keyEventType = DOWN)
-        }
-        else {
-          fireKeyEvent(key = "Shift", code = "ShiftLeft", location = LEFT, keyEventType = UP)
-        }
+        val key = JsKey("Shift")
+        val code = VK.SHIFT
+        val type = newState.toKeyEventType()
+
+        fireKeyEvent(key = key, code = code, location = LEFT, keyEventType = type)
       }
     )
 
     ToggleButton(
       text = "F*",
       parent = panel,
+      elementId = "toggleFunctionalKeys",
       onStateChange = { newState ->
         functionalButtonsPanel.style.display = newState.toDisplayType()
       }
     )
 
-    if (ParamsProvider.MOBILE_SETTING == ParamsProvider.MobileSetting.ALL) {
+    if (supportVirtualKeyboard) {
       ToggleButton(
         text = "⌨",  // Keyboard symbol
         parent = panel,
+        elementId = "toggleInput",
         onStateChange = { newState ->
           when (newState) {
             true -> {
@@ -324,8 +341,9 @@ class MobileKeyboardHelperImpl(
   override fun dispose() {
     panel.remove()
     virtualKeyboardInput.remove()
+    fallbackInputMethod?.dispose()
 
-    if (ParamsProvider.MOBILE_SETTING == ParamsProvider.MobileSetting.ALL) {
+    if (supportVirtualKeyboard) {
       document.removeEventListener("selectionchange", this::handleVirtualKeyboardSelection)
     }
   }
@@ -333,6 +351,7 @@ class MobileKeyboardHelperImpl(
   private class ToggleButton(
     text: String,
     parent: Node,
+    elementId: String,
     private val onStateChange: (newState: Boolean) -> Unit,
   ) {
 
@@ -347,6 +366,8 @@ class MobileKeyboardHelperImpl(
         borderRadius = "3px"
         asDynamic().userSelect = "none"
       }
+
+      id = elementId
 
       innerText = text
 
@@ -389,6 +410,7 @@ class MobileKeyboardHelperImpl(
   private class SimpleButton(
     text: String,
     parent: Node,
+    elementId: String,
     private val onClick: () -> Unit,
   ) {
 
@@ -401,6 +423,8 @@ class MobileKeyboardHelperImpl(
         borderRadius = "3px"
         asDynamic().userSelect = "none"
       }
+
+      id = elementId
 
       innerText = text
 
@@ -439,15 +463,15 @@ class MobileKeyboardHelperImpl(
     }
   }
 
-  companion object {
+  private companion object {
 
     private const val DISABLED_COLOR = "#ACA"
     private const val ENABLED_COLOR = "#8F8"
 
-    private const val TEXTAREA_VALUE = "\n--\n"
+    private const val TEXTAREA_VALUE = "\n----\n"
 
     private const val MINIMUM_MS_BETWEEN_INPUT_AND_SELECTION_CHANGE = 100
 
-    private val logger = Logger<MobileKeyboardHelperImpl>()
+    private val logger = Logger<MobileInputMethod>()
   }
 }

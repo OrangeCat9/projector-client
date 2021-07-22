@@ -35,11 +35,11 @@ import io.ktor.server.netty.Netty
 import io.ktor.websocket.DefaultWebSocketServerSession
 import io.ktor.websocket.WebSockets
 import io.ktor.websocket.webSocket
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.receiveOrNull
 import org.jetbrains.projector.common.protocol.data.FontDataHolder
 import org.jetbrains.projector.common.protocol.data.TtfFontData
-import org.jetbrains.projector.common.protocol.handshake.COMMON_VERSION
-import org.jetbrains.projector.common.protocol.handshake.ToClientHandshakeSuccessEvent
-import org.jetbrains.projector.common.protocol.handshake.commonVersionList
+import org.jetbrains.projector.common.protocol.handshake.*
 import org.jetbrains.projector.common.protocol.toClient.ServerPingReplyEvent
 import org.jetbrains.projector.common.protocol.toClient.ToClientMessageType
 import org.jetbrains.projector.common.protocol.toServer.ClientEvent
@@ -55,9 +55,11 @@ import kotlin.test.assertNotNull
 
 object ConnectionUtil {
 
+  const val DEFAULT_PORT = 8887
+
   private val clientFile = File("../projector-client-web/build/distributions/index.html")
 
-  val clientUrl = "file://${clientFile.absolutePath}"
+  val clientUrl = "file://${clientFile.absolutePath}?port=$DEFAULT_PORT"
 
   private fun getFontHolderData(): FontDataHolder {
     val data = File("src/intTest/resources/fonts/intTestFont.ttf").readBytes()
@@ -68,10 +70,17 @@ object ConnectionUtil {
 
   data class SenderReceiver(
     val sender: suspend (ToClientMessageType) -> Unit,
-    val receiver: suspend () -> ToServerMessageType,
+    val receiver: suspend () -> ToServerMessageType?,
   )
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   private suspend fun DefaultWebSocketServerSession.doHandshake(handlePing: Boolean): SenderReceiver {
+    val (handshakeVersion, handshakeVersionId) = (incoming.receive() as Frame.Text).readText().split(";")
+    assertEquals("$HANDSHAKE_VERSION", handshakeVersion,
+                 "Incompatible handshake versions: server - $HANDSHAKE_VERSION (#${handshakeVersionList.indexOf(HANDSHAKE_VERSION)}), " +
+                 "client - $handshakeVersion (#$handshakeVersionId)"
+    )
+
     val handshakeText = (incoming.receive() as Frame.Text).readText()
     val toServerHandshakeEvent = KotlinxJsonToServerHandshakeDecoder.decode(handshakeText)
 
@@ -116,8 +125,9 @@ object ConnectionUtil {
       outgoing.send(Frame.Binary(true, toClientCompressor.compress(toClientEncoder.encode(it))))
     }
 
-    val receiver: suspend () -> ToServerMessageType = {
-      val events = toServerDecoder.decode(toServerDecompressor.decompress((incoming.receive() as Frame.Text).readText()))
+    val receiver: suspend () -> ToServerMessageType? = receiver@{
+      val received = incoming.receiveOrNull() ?: return@receiver null
+      val events = toServerDecoder.decode(toServerDecompressor.decompress((received as Frame.Text).readText()))
 
       val answer = mutableListOf<ClientEvent>()
 
@@ -140,7 +150,7 @@ object ConnectionUtil {
   }
 
   fun startServerAndDoHandshake(
-    port: Int = 8887,  // todo: take from constant "default server port"
+    port: Int = DEFAULT_PORT,
     handlePing: Boolean = true,
     beforeHandshake: suspend () -> Unit = {},
     afterHandshake: suspend DefaultWebSocketServerSession.(senderReceiver: SenderReceiver) -> Unit,

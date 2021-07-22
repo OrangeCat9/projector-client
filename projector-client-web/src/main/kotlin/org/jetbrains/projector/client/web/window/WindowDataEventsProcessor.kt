@@ -27,7 +27,6 @@ import kotlinx.browser.document
 import org.jetbrains.projector.client.common.SingleRenderingSurfaceProcessor.Companion.shrinkByPaintEvents
 import org.jetbrains.projector.client.common.misc.ImageCacher
 import org.jetbrains.projector.client.common.misc.ParamsProvider
-import org.jetbrains.projector.common.misc.firstNotNullOrNull
 import org.jetbrains.projector.common.protocol.data.ImageId
 import org.jetbrains.projector.common.protocol.toClient.ServerWindowEvent
 import org.jetbrains.projector.common.protocol.toClient.ServerWindowSetChangedEvent
@@ -43,10 +42,9 @@ class WindowDataEventsProcessor(private val windowManager: WindowManager) {
 
   private var excludedWindowIds = emptyList<Int>()
 
-  @OptIn(ExperimentalStdlibApi::class)
-  fun redrawWindows() {
+  fun drawPendingEvents() {
     synchronized(windowManager) {
-      windowManager.forEach(Window::drawBufferedEvents)
+      windowManager.forEach(Window::drawPendingEvents)
     }
   }
 
@@ -88,7 +86,7 @@ class WindowDataEventsProcessor(private val windowManager: WindowManager) {
     val topmostWindowTitle = presentedWindows
       .filter(WindowData::isShowing)
       .sortedByDescending(WindowData::zOrder)
-      .firstNotNullOrNull(WindowData::title)
+      .firstNotNullOfOrNull(WindowData::title)
 
     document.title = topmostWindowTitle ?: DEFAULT_TITLE
   }
@@ -120,7 +118,6 @@ class WindowDataEventsProcessor(private val windowManager: WindowManager) {
     document.head!!.appendChild(link)
   }
 
-  @OptIn(ExperimentalStdlibApi::class)
   fun draw(windowId: Int, commands: List<ServerWindowEvent>) {
     if (windowId in excludedWindowIds) {
       return
@@ -137,8 +134,8 @@ class WindowDataEventsProcessor(private val windowManager: WindowManager) {
       val newEvents = commands.shrinkByPaintEvents()
 
       if (newEvents.isNotEmpty()) {
-        window.drawEvents.addAll(newEvents)
-        window.drawBufferedEvents()
+        window.newDrawEvents.addAll(newEvents)
+        window.drawNewEvents()
       }
     }
   }

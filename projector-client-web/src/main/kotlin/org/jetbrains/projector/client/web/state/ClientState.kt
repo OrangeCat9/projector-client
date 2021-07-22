@@ -26,9 +26,14 @@ package org.jetbrains.projector.client.web.state
 import kotlinext.js.jsObject
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.jetbrains.projector.client.common.misc.ImageCacher
 import org.jetbrains.projector.client.common.misc.ParamsProvider
 import org.jetbrains.projector.client.common.misc.TimeStamp
+import org.jetbrains.projector.client.common.protocol.KotlinxJsonToClientHandshakeDecoder
+import org.jetbrains.projector.client.common.protocol.KotlinxJsonToServerHandshakeEncoder
 import org.jetbrains.projector.client.web.ServerEventsProcessor
 import org.jetbrains.projector.client.web.WindowSizeController
 import org.jetbrains.projector.client.web.component.MarkdownPanelManager
@@ -36,11 +41,7 @@ import org.jetbrains.projector.client.web.debug.DivSentReceivedBadgeShower
 import org.jetbrains.projector.client.web.debug.NoSentReceivedBadgeShower
 import org.jetbrains.projector.client.web.debug.SentReceivedBadgeShower
 import org.jetbrains.projector.client.web.input.InputController
-import org.jetbrains.projector.client.web.input.MobileKeyboardHelperImpl
-import org.jetbrains.projector.client.web.input.NopMobileKeyboardHelper
 import org.jetbrains.projector.client.web.misc.*
-import org.jetbrains.projector.client.common.protocol.KotlinxJsonToClientHandshakeDecoder
-import org.jetbrains.projector.client.common.protocol.KotlinxJsonToServerHandshakeEncoder
 import org.jetbrains.projector.client.web.protocol.SupportedTypesProvider
 import org.jetbrains.projector.client.web.speculative.Typing
 import org.jetbrains.projector.client.web.ui.ReconnectionMessage
@@ -82,6 +83,7 @@ sealed class ClientState {
       document.body!!.apply {
         style.apply {
           backgroundColor = ParamsProvider.BACKGROUND_COLOR
+          asDynamic().overscrollBehaviorX = "none"
           asDynamic().overscrollBehaviorY = "none"
           asDynamic().touchAction = "none"
         }
@@ -169,7 +171,8 @@ sealed class ClientState {
             commonVersion = COMMON_VERSION,
             commonVersionId = commonVersionList.indexOf(COMMON_VERSION),
             token = ParamsProvider.HANDSHAKE_TOKEN,
-            initialSize = windowSizeController.currentSize,
+            displays = listOf(DisplayDescription(0, 0, windowSizeController.currentSize.width, windowSizeController.currentSize.height, 1.0)),
+            clientDoesWindowManagement = false,
             supportedToClientCompressions = supportedToClientDecompressors.map(MessageDecompressor<*>::compressionType),
             supportedToClientProtocols = supportedToClientDecoders.map(MessageDecoder<*, *>::protocolType),
             supportedToServerCompressions = supportedToServerCompressors.map(MessageCompressor<*>::compressionType),
@@ -177,6 +180,7 @@ sealed class ClientState {
           )
         }
 
+        webSocket.send("$HANDSHAKE_VERSION;${handshakeVersionList.indexOf(HANDSHAKE_VERSION)}")
         webSocket.send(KotlinxJsonToServerHandshakeEncoder.encode(handshakeEvent))
 
         OnScreenMessenger.showText("Connection is opened", "Handshake is sent...", canReload = false)
@@ -192,7 +196,7 @@ sealed class ClientState {
       }
 
       is ClientAction.WebSocket.Close -> {
-        showDisconnectedMessage(webSocket.url, action.closeCode)
+        showDisconnectedMessage(webSocket.url, action)
         onHandshakeFinish()
 
         Disconnected
@@ -221,7 +225,7 @@ sealed class ClientState {
             webSocket.close()
             onHandshakeFinish()
 
-            this  // todo: handle this case
+            Disconnected
           }
 
           is ToClientHandshakeSuccessEvent -> {
@@ -267,6 +271,13 @@ sealed class ClientState {
             )
           }
         }
+      }
+
+      is ClientAction.WebSocket.Close -> {
+        showDisconnectedMessage(webSocket.url, action)
+        onHandshakeFinish()
+
+        Disconnected
       }
 
       else -> super.consume(action)
@@ -328,10 +339,13 @@ sealed class ClientState {
 
     private val windowDataEventsProcessor = WindowDataEventsProcessor(windowManager)
 
-    private val repainter = window.setInterval(
-      handler = { windowDataEventsProcessor.redrawWindows() },
-      timeout = ParamsProvider.REPAINT_INTERVAL_MS,
-    )
+    private var drawPendingEvents = GlobalScope.launch {
+      // redraw windows in case any missing images are loaded now
+      while (true) {
+        windowDataEventsProcessor.drawPendingEvents()
+        delay(ParamsProvider.REPAINT_INTERVAL_MS.toLong())
+      }
+    }
 
     private val serverEventsProcessor = ServerEventsProcessor(windowDataEventsProcessor)
 
@@ -385,11 +399,6 @@ sealed class ClientState {
 
     private val markdownPanelManager = MarkdownPanelManager(windowManager::getWindowZIndex) { link ->
       stateMachine.fire(ClientAction.AddEvent(ClientOpenLinkEvent(link)))
-    }
-
-    private val mobileKeyboardHelper = when (ParamsProvider.MOBILE_SETTING) {
-      ParamsProvider.MobileSetting.DISABLED -> NopMobileKeyboardHelper
-      else -> MobileKeyboardHelperImpl(openingTimeStamp, inputController.specialKeysState) { stateMachine.fire(ClientAction.AddEvent(it)) }
     }
 
     private val closeBlocker = when (ParamsProvider.BLOCK_CLOSING) {
@@ -491,7 +500,7 @@ sealed class ClientState {
         val event = action.event
 
         if (event is ClientKeyPressEvent) {
-          event.key.singleOrNull()?.let(typing::addChar)
+          typing.addChar(event.char)
         }
 
         eventsToSend.add(event)
@@ -516,28 +525,26 @@ sealed class ClientState {
       }
 
       is ClientAction.WebSocket.Close -> {
-        Do exhaustive when (action) {
-          is ClientAction.WebSocket.Close.FinishNormal -> {
+        Do exhaustive when (action.endedNormally) {
+          true -> {
             logger.info { "Connection is closed..." }
 
-            window.clearInterval(repainter)
+            drawPendingEvents.cancel()
             pingStatistics.onClose()
             windowDataEventsProcessor.onClose()
             inputController.removeListeners()
             windowSizeController.removeListener()
             typing.dispose()
             markdownPanelManager.disposeAll()
-            mobileKeyboardHelper.dispose()
             closeBlocker.removeListener()
             selectionBlocker.unblockSelection()
             connectionWatcher.removeWatcher()
 
-            showDisconnectedMessage(webSocket.url, action.closeCode)
+            showDisconnectedMessage(webSocket.url, action)
             Disconnected
           }
 
-          is ClientAction.WebSocket.Close.FinishError ->
-            reloadConnection("Connection is closed unexpectedly, retrying the connection...")
+          false -> reloadConnection("Connection is closed unexpectedly, retrying the connection...")
         }
       }
 
@@ -550,12 +557,11 @@ sealed class ClientState {
     private fun reloadConnection(messageText: String): ClientState {
       logger.info { messageText }
 
-      window.clearInterval(repainter)
+      drawPendingEvents.cancel()
       pingStatistics.onClose()
       inputController.removeListeners()
       windowSizeController.removeListener()
       typing.dispose()
-      mobileKeyboardHelper.dispose()
       connectionWatcher.removeWatcher()
 
       layers.reconnectionMessageUpdater(messageText)
@@ -580,23 +586,25 @@ sealed class ClientState {
     private const val NORMAL_CLOSURE_STATUS_CODE: Short = 1000
     private const val GOING_AWAY_STATUS_CODE: Short = 1001
 
-    private fun showDisconnectedMessage(url: String, closeCode: Short) {
-      Do exhaustive when (closeCode in setOf(NORMAL_CLOSURE_STATUS_CODE, GOING_AWAY_STATUS_CODE)) {
+    private val ClientAction.WebSocket.Close.endedNormally: Boolean
+      get() = this.wasClean && this.code in setOf(NORMAL_CLOSURE_STATUS_CODE, GOING_AWAY_STATUS_CODE)
+
+    private fun showDisconnectedMessage(url: String, action: ClientAction.WebSocket.Close) {
+      val reason = action.reason.ifBlank { null }?.let { "Reason: $it" } ?: "The server hasn't reported a reason of the disconnection."
+
+      Do exhaustive when (action.endedNormally) {
         true -> OnScreenMessenger.showText(
           "Disconnected",
-          "It seems that your connection is ended normally.",
+          "It seems that your connection is ended normally. $reason",
           canReload = true
         )
 
         false -> OnScreenMessenger.showText(
           "Connection problem",
-          buildString {
-            append("There is no connection to <strong>$url</strong>. ")
-            append("The browser console can contain the error and a more detailed description. ")
-            append("Everything we know is that <code>CloseEvent.code=$closeCode</code> ")
-            append(
-              "(<a href='https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent#Status_codes'>https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent#Status_codes</a>).")
-          },
+          "There is no connection to <strong>$url</strong>. " +
+          "The browser console can contain the error and a more detailed description. " +
+          "Everything we know is that <code>CloseEvent.code=${action.code}</code>, " +
+          "<code>CloseEvent.wasClean=${action.wasClean}</code>. $reason",
           canReload = true
         )
       }
@@ -613,12 +621,7 @@ sealed class ClientState {
         onclose = fun(event: Event) {
           require(event is CloseEvent)
 
-          val action = when (event.code) {
-            NORMAL_CLOSURE_STATUS_CODE, GOING_AWAY_STATUS_CODE -> ClientAction.WebSocket.Close.FinishNormal(event.code)
-            else -> ClientAction.WebSocket.Close.FinishError(event.code)
-          }
-
-          stateMachine.fire(action)
+          stateMachine.fire(ClientAction.WebSocket.Close(wasClean = event.wasClean, code = event.code, reason = event.reason))
         }
 
         onmessage = fun(messageEvent: MessageEvent) {

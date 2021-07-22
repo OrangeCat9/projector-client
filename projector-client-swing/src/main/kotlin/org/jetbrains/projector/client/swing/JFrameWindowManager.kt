@@ -24,18 +24,18 @@
 package org.jetbrains.projector.client.swing
 
 import org.jetbrains.projector.client.common.canvas.SwingCanvas
+import org.jetbrains.projector.common.protocol.toClient.WindowData
 import org.jetbrains.projector.common.protocol.toServer.ClientWindowCloseEvent
 import org.jetbrains.projector.common.protocol.toServer.ClientWindowMoveEvent
 import org.jetbrains.projector.common.protocol.toServer.ClientWindowResizeEvent
 import org.jetbrains.projector.common.protocol.toServer.ResizeDirection
 import org.jetbrains.projector.util.logging.Logger
-import org.jetbrains.projector.util.logging.loggerFactory
 import java.awt.Dimension
 import java.awt.Point
 import java.awt.event.*
 import javax.swing.JFrame
 
-class JFrameWindowManager(val transport: ProjectorTransport) : AbstractWindowManager<JFrame>() {
+open class JFrameWindowManager(val transport: ProjectorTransport) : AbstractWindowManager<JFrame>() {
   companion object {
     private val logger = Logger<JFrameWindowManager>()
   }
@@ -43,17 +43,20 @@ class JFrameWindowManager(val transport: ProjectorTransport) : AbstractWindowMan
   private var windowOldSizesMap = HashMap<Int, Dimension>()
   private var windowOldPositionsMap = HashMap<Int, Point>()
 
-  override fun newFrame(windowId: Int, canvas: SwingCanvas): JFrame {
+  override fun newFrame(windowId: Int, canvas: SwingCanvas, windowData: WindowData): JFrame {
     return JFrame().apply {
       rootPane.contentPane.add(ProjectorViewPanel(canvas, transport.connectionTime).apply a2@{
-        addListeners(windowId, this@apply) {
+        addListeners(windowId) {
           // todo: grouping?
           transport.send(it)
         }
       })
       addListeners(this, windowId)
+      isUndecorated = windowData.undecorated
     }
   }
+
+  open fun shouldWindowBeShown(frameData: FrameData): Boolean = true
 
   private fun addListeners(jFrame: JFrame, windowId: Int) {
     windowOldSizesMap[windowId] = Dimension(jFrame.width, jFrame.height)
@@ -98,19 +101,18 @@ class JFrameWindowManager(val transport: ProjectorTransport) : AbstractWindowMan
     val newFrame = frameData.frame
     val it = frameData.windowData
 
-    //newFrame.isUndecorated = it.undecorated
     newFrame.title = it.title
     newFrame.isResizable = it.resizable
     val newDimension = Dimension(it.bounds.width.toInt(), it.bounds.height.toInt())
     windowOldSizesMap[it.id] = newDimension
     newFrame.size = newDimension
-    newFrame.isVisible = it.isShowing
+    newFrame.isVisible = it.isShowing && shouldWindowBeShown(frameData)
 
     windowOldPositionsMap[it.id] = Point(it.bounds.x.toInt(), it.bounds.y.toInt())
     newFrame.setLocation(it.bounds.x.toInt(), it.bounds.y.toInt())
   }
 
-  override fun updateWindow(frame: FrameData) {
+  override fun redrawWindow(frame: FrameData) {
     val component = frame.frame.rootPane.contentPane.getComponent(0) as ProjectorViewPanel
     component.revalidate()
     component.repaint()

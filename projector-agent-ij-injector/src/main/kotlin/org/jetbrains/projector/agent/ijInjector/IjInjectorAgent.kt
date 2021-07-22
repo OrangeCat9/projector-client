@@ -23,6 +23,7 @@
  */
 package org.jetbrains.projector.agent.ijInjector
 
+import org.jetbrains.projector.agent.init.toArgsMap
 import org.jetbrains.projector.util.logging.Logger
 import java.lang.instrument.Instrumentation
 
@@ -34,16 +35,7 @@ public object IjInjectorAgent {
   public fun agentmain(args: String, instrumentation: Instrumentation) {
     logger.debug { "IjInjectorAgent agentmain start, args=$args" }
 
-    val (
-      ijClProviderClass, ijClProviderMethod,
-      mdPanelMakerClass, mdPanelMakerMethod,
-    ) = args.split(';')
-
-    IjInjector.agentmain(
-      instrumentation,
-      ijClProviderClass = ijClProviderClass, ijClProviderMethod = ijClProviderMethod,
-      mdPanelMakerClass = mdPanelMakerClass, mdPanelMakerMethod = mdPanelMakerMethod,
-    )
+    IjInjector.agentmain(instrumentation, args.toArgsMap())
 
     logger.debug { "IjInjectorAgent agentmain finish" }
   }

@@ -37,9 +37,18 @@ import java.util.concurrent.ConcurrentLinkedQueue
 public sealed class ClientSettings {
 
   public abstract val connectionMillis: Long
+  public abstract val address: String?
 }
 
-public class ConnectedClientSettings(override val connectionMillis: Long) : ClientSettings()
+public class ConnectedClientSettings(
+  override val connectionMillis: Long,
+  override val address: String?,
+) : ClientSettings()
+
+public class SupportedHandshakeClientSettings(
+  override val connectionMillis: Long,
+  override val address: String?,
+) : ClientSettings()
 
 public data class SetUpClientData(
   val hasWriteAccess: Boolean,
@@ -51,11 +60,13 @@ public data class SetUpClientData(
 
 public class SetUpClientSettings(
   override val connectionMillis: Long,
+  override val address: String?,
   public val setUpClientData: SetUpClientData,
 ) : ClientSettings()
 
 public class ReadyClientSettings(
   override val connectionMillis: Long,
+  override val address: String?,
   public val setUpClientData: SetUpClientData,
   bigCollectionSize: Int?,
 ) : ClientSettings() {
@@ -93,3 +104,9 @@ public class ReadyClientSettings(
     }
   }
 }
+
+public class ClosedClientSettings(
+  override val connectionMillis: Long,
+  override val address: String?,
+  public val reason: String,
+) : ClientSettings()
